@@ -1,0 +1,161 @@
+---
+title: "Case Study"
+author: "Group 4"
+date: "2025-11-09"
+output: powerpoint_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(gridExtra)
+library(plm)
+library(fect)
+```
+
+## R Markdown
+
+This is an R Markdown presentation. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document.
+
+## Load and Wrangle Data
+```{r data_import}
+# Create link to dataset
+url <- 'https://raw.githubusercontent.com/pmwest7/case_study/refs/heads/main/synthetic_sales.csv'
+
+# Read file into dataframe
+data <- read.csv(url)
+
+```
+
+```{r glimpse}
+data |> glimpse()
+```
+
+```{r summary}
+data |> summary()
+```
+
+```{r}
+# Add new variable converting group assignments to binary 0/1
+data <- data |>
+  mutate(assignment = as.numeric(group == 'Treatment'))
+
+data |> head()
+```
+## Exploratory Data Analysis (EDA)
+```{r barplot}
+group_size <- ggplot(data, mapping = aes(x = group, label= ..count..)) +
+  geom_bar(fill='#1170aa') +
+  geom_text(stat = 'count', vjust=-0.5, size = 5) +
+  ylim(0, 350)
+
+group_size
+
+```
+
+```{r hist_boxplot}
+
+# histogram of April sales per hour
+apr_sales_per_hour <- ggplot(data, mapping = aes(x = apr_sph)) +
+  geom_histogram(binwidth=100, color = '#ffffff', fill='#1170aa') +
+  xlim(0, 2500) +
+  ylim(0, 80)
+
+# histogram of May sales per hour
+may_sales_per_hour <- ggplot(data, mapping = aes(x = may_sph)) +
+  geom_histogram(binwidth=100, color = '#ffffff', fill='#fc7d0b') +
+   xlim(0, 2500) +
+  ylim(0, 80)
+
+apr_summary <- ggplot(data, mapping = aes(x = factor(group), y = apr_sph)) +
+  geom_boxplot() +
+  ylim(0, 2500)
+
+may_summary <- ggplot(data, mapping = aes(x = factor(group), y = may_sph)) +
+  geom_boxplot() +
+  ylim(0, 2500)
+
+grid.arrange(apr_sales_per_hour, may_sales_per_hour, apr_summary, may_summary, ncol=2, nrow=2)
+```
+## Parallel Trends
+```{r panel_data }
+# Create a new dataframe for use in evaluating the pre-treatment period for both the treated and untreated groups
+pre_kU <- data |>
+  select(assignment, apr_sph) |> # append group values and April sales/hour to the new dataframe
+  rename(sales_per_hr = apr_sph) |> # append column to standardize sales per hour variable label
+  mutate(time=0, # append a new variable, time, set equal to 1 to indicate the pre-period
+         did_assign = assignment, # append a new variable and copy assignment values
+         assignment = 0)# update assignment to 0 to indicate pre-treatment assignment
+
+# Create a new dataframe for use in evaluating the post-treatment period for both the treated and untreated groups         
+post_kU <- data |>
+  select(assignment, may_sph) |> # append group values and May sales/hour to the new dataframe
+  rename(sales_per_hr = may_sph) |> # append column to standardize sales per hour variable label
+  mutate(time=1, # append a new variable, time, set equal to 2 to indicate the post-period
+         did_assign = assignment)# append a new variable indicating the true group assignment
+
+# Combine the pre- and post-treatment observations
+kU_2x2_DD <- bind_rows(pre_kU, post_kU) |> 
+  mutate(id = rep(data$sp_id, 2)) |> # replicate the employee id number to match pre- and post- treatment records for employees
+  mutate(did_assign = factor(did_assign),
+         id = factor(id)) # encode variables as factors (categories)
+
+```
+
+```{r}
+ggplot(kU_2x2_DD, aes(x = time, y = sales_per_hr, color=did_assign)) +
+      geom_smooth(alpha=0.1, method="lm", formula=y ~ x) + 
+      labs(title='Evaluation of Sales Per Hour (SPH) From April to May',
+           x = 'Period',
+           y = 'Sales/Hour (SPH)',
+           color = 'Group') + 
+  theme_bw()
+
+```
+
+## Difference-in-Differences
+```{r}
+
+# Use Panel Data Estimators to evaluate differences in mean within units between the two periods
+
+panel_df <- pdata.frame(kU_2x2_DD, index=c('id', 'time'))
+
+standard_did <- plm(sales_per_hr ~ assignment,
+                    data = panel_df,
+                    model = 'within',
+                    effect = 'twoways')
+
+standard_did |> summary()
+
+```
+
+## Fixed Effects Counterfactual Estimators
+Not statistically significant
+confidence interval contains zero
+p-value > 0.05
+```{r fixed effect}
+# https://yiqingxu.org/packages/fect/
+
+counter_est <- fect(sales_per_hr ~ assignment,
+                    data = kU_2x2_DD,
+                    Y = 'sales_per_hr', # outcome
+                    D = 'assignment', # treatment
+                    index = c('id', 'time'),
+                    seed = 7890,
+                    se = TRUE)
+
+counter_est
+
+```
+
+```{r fect_plot}
+plot(counter_est, count = FALSE, return.test = TRUE) # returns plots and test statistics
+
+```
+
+```{r}
+
+
+```
