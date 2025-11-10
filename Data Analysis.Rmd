@@ -2,13 +2,21 @@
 title: "Case Study"
 author: "Group 4"
 date: "2025-11-09"
-output: powerpoint_presentation
+output:
+  ioslides_presentation: default
+  powerpoint_presentation: default
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, incliude = FALSE)
+
+if (!requireNamespace('pwr', quietly = TRUE)) {
+    install.packages('pwr')
+}
+
 library(tidyverse)
 library(gridExtra)
+library(pwr)
 library(plm)
 library(fect)
 ```
@@ -19,6 +27,11 @@ This is an R Markdown presentation. Markdown is a simple formatting syntax for a
 
 When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document.
 
+## Define Outcome
+$H_0:$ There is no difference in the average sales per hour between the treatment group, `k`, and control group, `U`.
+
+$H_a:$ There is a difference in the average sales per hour between the treatment group, `k`, and control group, `U`.
+
 ## Load and Wrangle Data
 ```{r data_import}
 # Create link to dataset
@@ -28,32 +41,50 @@ url <- 'https://raw.githubusercontent.com/pmwest7/case_study/refs/heads/main/syn
 data <- read.csv(url)
 
 ```
-
+## Examine data structure
 ```{r glimpse}
 data |> glimpse()
 ```
-
+## Examine Summary Statistics
 ```{r summary}
 data |> summary()
 ```
-
+## Transform Data
 ```{r}
 # Add new variable converting group assignments to binary 0/1
 data <- data |>
   mutate(assignment = as.numeric(group == 'Treatment'))
+
+# Create segments
+data$segment <- ntile(data$apr_sph, 4)
 
 data |> head()
 ```
 ## Exploratory Data Analysis (EDA)
 ```{r barplot}
 group_size <- ggplot(data, mapping = aes(x = group, label= ..count..)) +
-  geom_bar(fill='#1170aa') +
+  geom_bar(fill = c('#fc7d0b', '#1170aa')) +
   geom_text(stat = 'count', vjust=-0.5, size = 5) +
   ylim(0, 350)
 
 group_size
 
 ```
+```{r}
+group_segments <- data |>
+  group_by(group = as.factor(group), segment) |>
+  summarize(count = n(), .groups = 'drop')
+
+group_segments
+
+ ggplot(group_segments, mapping = aes(x = segment, y = count, fill= group)) +
+  geom_col() +
+   scale_fill_manual(values = c('#fc7d0b', '#1170aa')) +
+   labs(title = 'Segmentation Distribution by Group') +
+   geom_text(aes(label = count, y=count), vjust=-0.5, size = 3) + 
+   facet_wrap(~ group)
+```
+
 
 ```{r hist_boxplot}
 
@@ -136,7 +167,6 @@ Not statistically significant
 confidence interval contains zero
 p-value > 0.05
 ```{r fixed effect}
-# https://yiqingxu.org/packages/fect/
 
 counter_est <- fect(sales_per_hr ~ assignment,
                     data = kU_2x2_DD,
@@ -155,7 +185,57 @@ plot(counter_est, count = FALSE, return.test = TRUE) # returns plots and test st
 
 ```
 
+## Power Analysis $1 - \beta$
+### Cohen's d
+The small control group size impacts the model's ability to find statistical significance, resulting in a high probability of failing to reject a false $H_0$. In this case 82% chance.
 ```{r}
+# Explore impact of imbalance between treatment and control groups
 
+# Standard deviation of control
+control_diff <- data$may_sph[data$assignment == 0]- data$apr_sph[data$assignment == 0]
+
+sd_0 <- sd(control_diff, na.rm = TRUE)
+
+# Standard deviation of treatment
+treat_diff <- data$may_sph[data$assignment == 1]- data$apr_sph[data$assignment == 1]
+
+sd_1 <- sd(treat_diff, na.rm = TRUE)
+
+pooled_sd <- sqrt((sd_0^2 + sd_1^2)/2)
+
+# Control mean
+mu_0 <- mean(control_diff, na.rm = TRUE)
+
+# Treatment mean
+mu_1 <- mean(treat_diff, na.rm = TRUE)
+
+# Estimation of effect size
+cohensd <- (mu_0 - mu_1)/pooled_sd
+
+# Sample size of treatment and control group
+n_0 <- sum(data$assignment == 0)
+n_1 <- sum(data$assignment == 1)
+
+power_of_test <- pwr.t2n.test(n1 = 26, n2 = 324, d = cohensd, sig.level = 0.05, alternative = "two.sided")
+
+power_of_test
+
+#sd_0
+#sd_1
+#pooled_sd
+#mu_1/mean(data$apr_sph[data$assignment == 1])
+#mu_0/mu_1
+#cohensd
+#n_0
+#n_1
+#treat_diff
 
 ```
+
+
+## References:
+Bounthavong, M. (2021, December 29). *Sample size estimation and power analysis*. RPubs.com. https://rpubs.com/mbounthavong/sample_size_power_analysis_R
+
+Ismay, c., Kim, A.Y. (2025, September 16). *A moderndive into R and the tidyverse*. https://moderndive.com/index.html
+
+Xu, Y. (2022). *fect*. [User Manual].GitHub.  https://yiqingxu.org/packages/fect/
