@@ -19,9 +19,8 @@ segment_col <- "segment"        # productivity/region segment
 
 # Identify April/May variable names automatically
 
-apr_vars <- names(raw)[str_detect(names(raw), "apr_")]
-may_vars <- names(raw)[str_detect(names(raw), "may_")]
-
+apr_vars <- c("apr_sph", "apr_sales", "apr_quantity", "apr_price", "apr_rts")
+may_vars <- c("may_sph", "may_sales", "may_quantity", "may_price", "may_rts")
 
 # =========================
 # 2. LOAD DATA
@@ -43,6 +42,14 @@ df <- raw %>%
     did   = treat * post
   )
 
+df <- df %>%
+  group_by(sp_id) %>%
+  mutate(apr_sph_val = sph[month == "apr"][1]) %>%
+  ungroup() %>%
+  mutate(
+    segment = ntile(apr_sph_val, 4),
+    segment = as.integer(segment)
+  )
 ###############################################################
 # Q1 – Parallel trends descriptive check
 ###############################################################
