@@ -1,0 +1,162 @@
+# =========================
+# 1. LOAD LIBRARIES
+# =========================
+# install.packages(c("tidyverse","lubridate","fixest","modelsummary","broom","janitor"))
+library(tidyverse)
+library(lubridate)
+library(fixest)       # fast, robust DiD (feols)
+library(modelsummary) # nice tables
+library(broom)
+library(janitor)
+theme_set(theme_minimal())
+
+FILE <- "synthetic_sales.csv"
+
+id_col      <- "unit_id"        # store/agent id
+time_col    <- "date"           # date or period column
+treat_col   <- "treatment"      # 0/1 indicator for ever-treated group
+segment_col <- "segment"        # productivity/region segment
+
+# Identify April/May variable names automatically
+
+apr_vars <- names(raw)[str_detect(names(raw), "apr_")]
+may_vars <- names(raw)[str_detect(names(raw), "may_")]
+
+
+# =========================
+# 2. LOAD DATA
+# =========================
+
+raw <- read_csv("synthetic_sales.csv") %>% clean_names()
+
+df <- raw %>%
+  pivot_longer(
+    cols = c(all_of(apr_vars), all_of(may_vars)),
+    names_to = c("month", ".value"),
+    names_pattern = "(apr|may)_(.*)"
+  ) %>%
+  mutate(
+    month = if_else(month == "apr", "apr", "may"),
+    time = if_else(month == "may", 1, 0),
+    treat = if_else(group == "Treatment", 1, 0),
+    post  = time,
+    did   = treat * post
+  )
+
+###############################################################
+# Q1 – Parallel trends descriptive check
+###############################################################
+
+# Pre/post means
+q1_table <- df %>%
+  group_by(group) %>%
+  summarise(
+    mean_apr = mean(sales[month == "apr"], na.rm = TRUE),
+    mean_may = mean(sales[month == "may"], na.rm = TRUE)
+  ) %>%
+  mutate(
+    abs_change = mean_may - mean_apr,
+    pct_change = (abs_change / mean_apr) * 100
+  )
+
+q1_table
+
+###############################################################
+# Q2 – DiD regressions (Sales + SPH)
+###############################################################
+
+# Simple DiD for sales
+m_sales <- feols(
+  sales ~ post + treat + did,
+  data = df,
+  cluster = ~ store_id
+)
+
+# DiD for SPH
+m_sph <- feols(
+  sph ~ post + treat + did,
+  data = df,
+  cluster = ~ store_id
+)
+
+modelsummary(
+  list("Sales DiD" = m_sales,
+       "SPH DiD"   = m_sph),
+  stars = TRUE,
+  gof_omit = "IC|Log|Adj"
+)
+
+###############################################################
+# Q3 – Group balance and descriptive comparisons
+###############################################################
+
+# Count stores in each group
+store_counts <- df %>%
+  distinct(store_id, treat, group) %>%
+  count(treat, group, name = "num_stores") %>%
+  mutate(
+    group_label = if_else(treat == 1, "Treatment", "Control")
+  )
+
+store_counts
+
+# Pre/post differences
+pre_post_means <- df %>%
+  group_by(group) %>%
+  summarise(
+    mean_apr = mean(sales[month == "apr"], na.rm = TRUE),
+    mean_may = mean(sales[month == "may"], na.rm = TRUE),
+    abs_change = mean_may - mean_apr,
+    pct_change = (abs_change / mean_apr) * 100
+  )
+
+pre_post_means
+
+# Combined Q3 table
+q3_table <- store_counts %>%
+  left_join(pre_post_means, by = c("group_label" = "group"))
+
+q3_table
+
+###############################################################
+# Q4 – Segment-level changes (RTS %, quantity, price)
+###############################################################
+
+# helper function
+mean_changes <- function(df, var) {
+  df %>%
+    group_by(segment, month) %>%
+    summarise(
+      mean_val = mean(.data[[var]], na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    pivot_wider(
+      names_from = month,
+      values_from = mean_val,
+      names_prefix = "mean_"
+    ) %>%
+    mutate(change = mean_may - mean_apr) %>%
+    select(segment, change)
+}
+
+# RTS in percent
+rts_tbl <- mean_changes(df, "rts") %>%
+  mutate(change_in_rts_pct = change * 100) %>%
+  select(segment, change_in_rts_pct)
+
+# Quantity
+qty_tbl <- mean_changes(df, "quantity") %>%
+  rename(change_in_quantity = change)
+
+# Price
+price_tbl <- mean_changes(df, "price") %>%
+  rename(change_in_price = change)
+
+# Final Q4 table
+q4_cio_table <- rts_tbl %>%
+  left_join(qty_tbl, by = "segment") %>%
+  left_join(price_tbl, by = "segment") %>%
+  filter(!is.na(segment)) %>%
+  arrange(segment)
+
+q4_cio_table
