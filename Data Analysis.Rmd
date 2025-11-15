@@ -56,10 +56,13 @@ data <- data |>
   mutate(assignment = as.numeric(group == 'Treatment'))
 
 # Create segments
-data$segment <- ntile(data$apr_sph, 4)
+data <- data |>
+  mutate(segment =ntile(data$apr_sph, 4))
 
 data |> head()
 ```
+
+
 ## Exploratory Data Analysis (EDA)
 ```{r barplot}
 group_size <- ggplot(data, mapping = aes(x = group, label= ..count..)) +
@@ -70,6 +73,7 @@ group_size <- ggplot(data, mapping = aes(x = group, label= ..count..)) +
 group_size
 
 ```
+
 ```{r}
 group_segments <- data |>
   group_by(group = as.factor(group), segment) |>
@@ -114,24 +118,27 @@ grid.arrange(apr_sales_per_hour, may_sales_per_hour, apr_summary, may_summary, n
 ```{r panel_data }
 # Create a new dataframe for use in evaluating the pre-treatment period for both the treated and untreated groups
 pre_kU <- data |>
-  select(assignment, apr_sph) |> # append group values and April sales/hour to the new dataframe
-  rename(sales_per_hr = apr_sph) |> # append column to standardize sales per hour variable label
+  select(assignment, apr_sph, apr_quantity, apr_price, apr_rts, segment) |> # append group values and April sales/hour to the new dataframe
+  rename(sales_per_hr = apr_sph, quantity = apr_quantity, price = apr_price, rts = apr_rts) |> # append column to standardize sales per hour variable label
   mutate(time=0, # append a new variable, time, set equal to 1 to indicate the pre-period
          did_assign = assignment, # append a new variable and copy assignment values
          assignment = 0)# update assignment to 0 to indicate pre-treatment assignment
 
+
 # Create a new dataframe for use in evaluating the post-treatment period for both the treated and untreated groups         
 post_kU <- data |>
-  select(assignment, may_sph) |> # append group values and May sales/hour to the new dataframe
-  rename(sales_per_hr = may_sph) |> # append column to standardize sales per hour variable label
+  select(assignment, may_sph, may_quantity, may_price, may_rts, segment) |> # append group values and May sales/hour to the new dataframe
+  rename(sales_per_hr = may_sph, quantity = may_quantity, price = may_price, rts = may_rts) |> # append column to standardize sales per hour variable label
   mutate(time=1, # append a new variable, time, set equal to 2 to indicate the post-period
          did_assign = assignment)# append a new variable indicating the true group assignment
+
 
 # Combine the pre- and post-treatment observations
 kU_2x2_DD <- bind_rows(pre_kU, post_kU) |> 
   mutate(id = rep(data$sp_id, 2)) |> # replicate the employee id number to match pre- and post- treatment records for employees
   mutate(did_assign = factor(did_assign),
-         id = factor(id)) # encode variables as factors (categories)
+         id = factor(id),
+         segment = factor(segment)) # encode variables as factors (categories)
 
 ```
 
@@ -146,7 +153,7 @@ ggplot(kU_2x2_DD, aes(x = time, y = sales_per_hr, color=did_assign)) +
 
 ```
 
-## Difference-in-Differences
+## Difference-in-Differences (aggregate)
 ```{r}
 
 # Use Panel Data Estimators to evaluate differences in mean within units between the two periods
@@ -162,13 +169,29 @@ standard_did |> summary()
 
 ```
 
+## Difference-in-Differences (productivity segment)
+```{r}
+
+# Use Panel Data Estimators to evaluate differences in mean within units between the two periods
+
+panel_df2 <- pdata.frame(kU_2x2_DD, index=c('segment', 'time'))
+
+standard_did2 <- plm(sales_per_hr ~ assignment,
+                    data = panel_df2,
+                    model = 'within',
+                    effect = 'twoways')
+
+standard_did2 |> summary()
+
+```
+
 ## Fixed Effects Counterfactual Estimators
 Not statistically significant
-confidence interval contains zero
-p-value > 0.05
+- confidence interval contains zero
+- p-value > 0.05
 ```{r fixed effect}
 
-counter_est <- fect(sales_per_hr ~ assignment,
+fect_est <- fect(sales_per_hr ~ assignment,
                     data = kU_2x2_DD,
                     Y = 'sales_per_hr', # outcome
                     D = 'assignment', # treatment
@@ -176,12 +199,85 @@ counter_est <- fect(sales_per_hr ~ assignment,
                     seed = 7890,
                     se = TRUE)
 
-counter_est
+fect_est
+
+```
+## Fixed Effects Counterfactual Estimators (segmented)
+Not statistically significant
+- confidence interval contains zero
+- p-value > 0.05
+```{r fixed effect}
+
+fect_est_segment <- fect(sales_per_hr ~ assignment,
+                    data = kU_2x2_DD,
+                    Y = 'sales_per_hr', # outcome
+                    D = 'assignment', # treatment
+                    group = 'segment',
+                    index = c('id', 'time'),
+                    seed = 7890,
+                    se = TRUE)
+
+fect_est_segment$est.group.att
+
+```
+
+## Fixed Effects Counterfactual Estimators (segmented - quantity)
+Statistically significant
+-  confidence interval does not contain zero
+- p-value < 0.05
+```{r fixed effect}
+
+fect_quantity <- fect(quantity ~ assignment,
+                    data = kU_2x2_DD,
+                    Y = 'quantity', # outcome
+                    D = 'assignment', # treatment
+                    group = 'segment',
+                    index = c('id', 'time'),
+                    seed = 7890,
+                    se = TRUE)
+
+fect_quantity$est.group.att
+
+```
+
+## Fixed Effects Counterfactual Estimators (segmented - price)
+
+```{r fixed effect}
+
+fect_price <- fect(price ~ assignment,
+                    data = kU_2x2_DD,
+                    Y = 'price', # outcome
+                    D = 'assignment', # treatment
+                    group = 'segment',
+                    index = c('id', 'time'),
+                    seed = 7890,
+                    se = TRUE)
+
+fect_price$est.group.att
+
+```
+
+## Fixed Effects Counterfactual Estimators (segmented - rts)
+statistically significant
+- confidence interval does not contain zero
+- p-value < 0.05
+```{r fixed effect}
+
+fect_rts <- fect(rts ~ assignment,
+                    data = kU_2x2_DD,
+                    Y = 'rts', # outcome
+                    D = 'assignment', # treatment
+                    group = 'segment',
+                    index = c('id', 'time'),
+                    seed = 7890,
+                    se = TRUE)
+
+str(fect_rts)
 
 ```
 
 ```{r fect_plot}
-plot(counter_est, count = FALSE, return.test = TRUE) # returns plots and test statistics
+plot(fect_est, count = FALSE, return.test = TRUE) # returns plots and test statistics
 
 ```
 
@@ -219,19 +315,61 @@ n_1 <- sum(data$assignment == 1)
 power_of_test <- pwr.t2n.test(n1 = 26, n2 = 324, d = cohensd, sig.level = 0.05, alternative = "two.sided")
 
 power_of_test
+```
+```{r}
+percent_diff_0 <- mu_0/mean(data$apr_sph[data$assignment == 0])
+percent_diff_1 <- mu_1/mean(data$apr_sph[data$assignment == 1])
 
-#sd_0
-#sd_1
-#pooled_sd
-#mu_1/mean(data$apr_sph[data$assignment == 1])
-#mu_0/mu_1
-#cohensd
-#n_0
-#n_1
-#treat_diff
+sprintf('The original findings are consistent with the standard DID esitmator. The change in the control group was %.2f, and the change in the treatment group was %.2f.', X <- percent_diff_0*100, y <- percent_diff_1*100)
 
 ```
 
+```{r}
+plot(counter_est,
+     plot.ci = "0.95",
+     show.points = FALSE)
+
+```
+
+```{r}
+ggplot(kU_2x2_DD, aes(x = time, y = sales_per_hr, color=did_assign)) +
+      geom_smooth(alpha=0.1, method="lm", formula=y ~ x) + 
+      labs(title='Evaluation of Sales Per Hour (SPH) From April to May',
+           x = 'Period',
+           y = 'Sales/Hour (SPH)',
+           color = 'Group') + 
+  theme_bw()
+
+```
+
+```{r}
+# Create a dataframe for use in comparing segment data 
+control_change <- data |>
+  filter(assignment == 0) |>
+  group_by(Type = segment) |>
+  mutate(change_rate = may_sph/apr_sph) |>
+  summarize(Percent_change = mean(change_rate)*100)
+
+treat_change <- data |>
+  filter(assignment == 1) |>
+  group_by(Type = segment) |>
+  mutate(change_rate = may_sph/apr_sph) |>
+  summarize(Percent_change = mean(change_rate)*100)
+
+treat_change -control_change
+```
+
+```{r}
+# Create a dataframe for use in comparing segment data 
+mean_changes <- function(df, var) { df %>% 
+    group_by(segment, month) %>% 
+    summarise( mean_val = mean(.data[[var]], na.rm = TRUE), .groups = "drop" ) %>% 
+    pivot_wider( names_from = month, values_from = mean_val, names_prefix = "mean_" ) %>%
+    mutate(change = (mean_may - mean_apr) * 100) %>% 
+    select(segment, change) }
+
+mean_changes(data, rts)
+```
 
 ## References:
 Bounthavong, M. (2021, December 29). *Sample size estimation and power analysis*. RPubs.com. https://rpubs.com/mbounthavong/sample_size_power_analysis_R
