@@ -1,0 +1,346 @@
+---
+title: "Case Study"
+author: "Group 4"
+date: "2025-11-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, incliude = FALSE)
+
+if (!requireNamespace('pwr', quietly = TRUE)) {
+    install.packages('pwr')
+}
+
+library(tidyverse)
+library(gridExtra)
+library(pwr)
+library(plm)
+library(fect)
+```
+
+## Define Outcome
+$H_0:$ There is no difference in the average sales per hour between the treatment group, `k`, and control group, `U`.
+
+$H_a:$ There is a difference in the average sales per hour between the treatment group, `k`, and control group, `U`.
+
+## Load and Wrangle Data
+```{r data_import}
+# Create link to dataset
+url <- 'https://raw.githubusercontent.com/pmwest7/case_study/refs/heads/main/synthetic_sales.csv'
+
+# Read file into dataframe
+data <- read.csv(url)
+
+```
+## Examine data structure
+```{r glimpse}
+data |> glimpse()
+```
+## Examine Summary Statistics
+```{r summary}
+data |> summary()
+```
+## Transform Data
+```{r}
+# Add new variable converting group assignments to binary 0/1
+data <- data |>
+  mutate(assignment = as.numeric(group == 'Treatment'))
+
+# Create segments for control group
+data <- data |>
+mutate(segment =case_when(group == 'Control' ~ ntile(apr_sph, 4), group == 'Treatment' ~ segment))
+
+data |> head()
+```
+
+
+## Exploratory Data Analysis (EDA)
+```{r barplot}
+group_size <- ggplot(data, mapping = aes(x = group, label= ..count..)) +
+  geom_bar(fill = c('#fc7d0b', '#1170aa')) +
+  geom_text(stat = 'count', vjust=-0.5, size = 5) +
+  ylim(0, 350)
+
+group_size
+
+```
+
+```{r}
+group_segments <- data |>
+  group_by(group = as.factor(group), segment) |>
+  summarize(count = n(), .groups = 'drop')
+
+group_segments
+
+ ggplot(group_segments, mapping = aes(x = segment, y = count, fill= group)) +
+  geom_col() +
+   scale_fill_manual(values = c('#fc7d0b', '#1170aa')) +
+   labs(title = 'Segmentation Distribution by Group') +
+   geom_text(aes(label = count, y=count), vjust=-0.5, size = 3) + 
+   facet_wrap(~ group)
+```
+
+
+```{r hist_boxplot}
+
+# histogram of April sales per hour
+apr_sales_per_hour <- ggplot(data, mapping = aes(x = apr_sph)) +
+  geom_histogram(binwidth=100, color = '#ffffff', fill='#1170aa') +
+  xlim(0, 2500) +
+  ylim(0, 80)
+
+# histogram of May sales per hour
+may_sales_per_hour <- ggplot(data, mapping = aes(x = may_sph)) +
+  geom_histogram(binwidth=100, color = '#ffffff', fill='#fc7d0b') +
+   xlim(0, 2500) +
+  ylim(0, 80)
+
+apr_summary <- ggplot(data, mapping = aes(x = factor(group), y = apr_sph)) +
+  geom_boxplot() +
+  ylim(0, 2500)
+
+may_summary <- ggplot(data, mapping = aes(x = factor(group), y = may_sph)) +
+  geom_boxplot() +
+  ylim(0, 2500)
+
+grid.arrange(apr_sales_per_hour, may_sales_per_hour, apr_summary, may_summary, ncol=2, nrow=2)
+```
+
+## Power Analysis $1 - \beta$
+### Cohen's d
+The small control group size impacts the model's ability to find statistical significance, resulting in a high probability of failing to reject a false $H_0$. In this case 82% chance.
+```{r}
+# Explore impact of imbalance between treatment and control groups
+
+# Standard deviation of control
+control_diff <- data$may_sph[data$assignment == 0]- data$apr_sph[data$assignment == 0]
+
+sd_0 <- sd(control_diff, na.rm = TRUE)
+
+# Standard deviation of treatment
+treat_diff <- data$may_sph[data$assignment == 1]- data$apr_sph[data$assignment == 1]
+
+sd_1 <- sd(treat_diff, na.rm = TRUE)
+
+pooled_sd <- sqrt((sd_0^2 + sd_1^2)/2)
+
+# Control mean
+mu_0 <- mean(control_diff, na.rm = TRUE)
+
+# Treatment mean
+mu_1 <- mean(treat_diff, na.rm = TRUE)
+
+# Estimation of effect size
+cohensd <- (mu_1 - mu_0)/pooled_sd
+
+# Sample size of treatment and control group
+n_0 <- sum(data$assignment == 0)
+n_1 <- sum(data$assignment == 1)
+
+power_of_test <- pwr.t2n.test(n1 = 24, n2 = 326, d = cohensd, sig.level = 0.05, alternative = "two.sided")
+
+power_of_test
+```
+## Parallel Trends
+```{r panel_data }
+# Create a new dataframe for use in evaluating the pre-treatment period for both the treated and untreated groups
+pre_kU <- data |>
+  select(assignment, apr_sph, apr_quantity, apr_price, apr_rts, segment) |> # append group values and April sales/hour to the new dataframe
+  rename(sales_per_hr = apr_sph, quantity = apr_quantity, price = apr_price, rts = apr_rts) |> # append column to standardize sales per hour variable label
+  mutate(time=0, # append a new variable, time, set equal to 1 to indicate the pre-period
+         did_assign = assignment, # append a new variable and copy assignment values
+         assignment = 0)# update assignment to 0 to indicate pre-treatment assignment
+
+
+# Create a new dataframe for use in evaluating the post-treatment period for both the treated and untreated groups         
+post_kU <- data |>
+  select(assignment, may_sph, may_quantity, may_price, may_rts, segment) |> # append group values and May sales/hour to the new dataframe
+  rename(sales_per_hr = may_sph, quantity = may_quantity, price = may_price, rts = may_rts) |> # append column to standardize sales per hour variable label
+  mutate(time=1, # append a new variable, time, set equal to 2 to indicate the post-period
+         did_assign = assignment)# append a new variable indicating the true group assignment
+
+
+# Combine the pre- and post-treatment observations
+kU_2x2_DD <- bind_rows(pre_kU, post_kU) |> 
+  mutate(id = rep(data$sp_id, 2)) |> # replicate the employee id number to match pre- and post- treatment records for employees
+  mutate(did_assign = factor(did_assign),
+         id = factor(id),
+         segment = factor(segment)) # encode variables as factors (categories)
+
+```
+
+```{r}
+ggplot(kU_2x2_DD, aes(x = time, y = sales_per_hr, color=did_assign)) +
+      geom_smooth(alpha=0.1, method="lm", formula=y ~ x) + 
+      labs(title='Evaluation of Sales Per Hour (SPH) From April to May',
+           x = 'Period',
+           y = 'Sales/Hour (SPH)',
+           color = 'Group') + 
+      scale_color_manual(values = c('#fc7d0b','#1170aa')) +
+  theme_bw()
+
+```
+
+## Difference-in-Differences (aggregate)
+```{r}
+
+# Use Panel Data Estimators to evaluate differences in mean within units between the two periods
+
+panel_df <- pdata.frame(kU_2x2_DD, index=c('id', 'time'))
+
+standard_did <- plm(sales_per_hr ~ assignment,
+                    data = panel_df,
+                    model = 'within',
+                    effect = 'twoways')
+
+standard_did |> summary()
+
+```
+## Fixed Effects Counterfactual Estimators
+Not statistically significant
+- confidence interval contains zero
+- p-value > 0.05
+```{r fixed effect}
+
+fect_est <- fect(sales_per_hr ~ assignment,
+                    data = kU_2x2_DD,
+                    Y = 'sales_per_hr', # outcome
+                    D = 'assignment', # treatment
+                    index = c('id', 'time'),
+                    seed = 7890,
+                    se = TRUE)
+
+fect_est
+
+```
+
+```{r fect_plot}
+plot(fect_est,
+     count = FALSE,
+     return.test = TRUE) # returns plots and test statistics
+
+```
+
+```{r}
+plot(fect_est,
+     plot.ci = "0.95",
+     show.points = FALSE)
+```
+
+```{r}
+percent_diff_0 <- mu_0/mean(data$apr_sph[data$assignment == 0])
+percent_diff_1 <- mu_1/mean(data$apr_sph[data$assignment == 1])
+
+sprintf('The original findings are consistent with the standard DID esitmator. The change in the control group was %.2f, and the change in the treatment group was %.2f.', X <- percent_diff_0*100, y <- percent_diff_1*100)
+
+```
+
+## Fixed Effects Counterfactual Estimators (segmented)
+Not statistically significant
+- confidence interval contains zero
+- p-value > 0.05
+```{r fixed effect segment}
+fect_est_segment <- fect(sales_per_hr ~ assignment,
+                    data = kU_2x2_DD,
+                    Y = 'sales_per_hr', # outcome
+                    D = 'assignment', # treatment
+                    group = 'segment',
+                    index = c('id', 'time'),
+                    seed = 7890,
+                    se = TRUE)
+
+fect_est_segment$est.group.att
+
+```
+
+## Fixed Effects Counterfactual Estimators (segmented - quantity)
+Statistically significant results for Segments 1 and 2, the traditionally low performers
+-  confidence interval does not contain zero
+- p-value < 0.05
+```{r fixed effect quantity}
+
+fect_quantity <- fect(quantity ~ assignment,
+                    data = kU_2x2_DD,
+                    Y = 'quantity', # outcome
+                    D = 'assignment', # treatment
+                    group = 'segment',
+                    na.rm = TRUE,
+                    index = c('id', 'time'),
+                    seed = 7890,
+                    se = TRUE
+                    )
+
+fect_quantity$est.group.att
+
+```
+
+## Fixed Effects Counterfactual Estimators (segmented - price)
+
+```{r fixed effect price}
+
+fect_price <- fect(price ~ assignment,
+                    data = kU_2x2_DD,
+                    Y = 'price', # outcome
+                    D = 'assignment', # treatment
+                    group = 'segment',
+                    index = c('id', 'time'),
+                    seed = 7890,
+                    se = TRUE)
+
+fect_price$est.group.att/2 # Why is this ATT double the value in the case study? Divided by two to make the values match. The other variables calculated to the the correct amount
+
+```
+
+## Fixed Effects Counterfactual Estimators (segmented - rts)
+statistically significant
+- confidence interval does not contain zero
+- p-value < 0.05
+```{r fixed effect rts}
+
+fect_rts <- fect(rts ~ assignment,
+                    data = kU_2x2_DD,
+                    Y = 'rts', # outcome
+                    D = 'assignment', # treatment
+                    group = 'segment',
+                    index = c('id', 'time'),
+                    seed = 7890,
+                    se = TRUE)
+
+fect_rts$est.group.att
+
+```
+
+```{r}
+treat_segments <- data |>
+  select(segment, apr_sph, may_sph, assignment) |>
+  filter(assignment == 1)|>
+  group_by(segment) |>
+  summarize(mean_difference = mean(may_sph - apr_sph), mu1 = mean(may_sph)) |>
+  mutate(ATT = (mean_difference/mu1)*100) |>
+  column_to_rownames(var='segment')
+
+ 
+control_segments <- data |>
+  select(segment, apr_sph, may_sph, assignment) |>
+  filter(assignment == 0)|>
+  group_by(segment) |>
+  summarize(mean_difference = mean(may_sph - apr_sph), mu0 = mean(may_sph)) |>
+  mutate(ATT = (mean_difference/mu0)*100) |>
+  column_to_rownames(var='segment')
+
+treat_segments
+control_segments
+
+treat_segments - control_segments
+
+```
+
+## References:
+Bounthavong, M. (2021, December 29). *Sample size estimation and power analysis*. RPubs.com. https://rpubs.com/mbounthavong/sample_size_power_analysis_R
+
+Cohen, J. (1988). Statistical power analysis for the behavioral sciences. Taylor & Francis Group. https://ebookcentral.proquest.com/lib/unc/detail.action?docID=1192162
+
+Ismay, c., Kim, A.Y. (2025, September 16). *A moderndive into R and the tidyverse*. https://moderndive.com/index.html
+
+Xu, Y. (2022). *fect*. [User Manual].GitHub.  https://yiqingxu.org/packages/fect/
