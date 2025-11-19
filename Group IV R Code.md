@@ -501,8 +501,7 @@ sprintf('The original findings are consistent with the standard DID esitmator. T
     [1] "The original findings are consistent with the standard DID esitmator. The change in the control group was 9.10, and the change in the treatment group was 9.99."
 
 Likewise, with the standard DiD estimators by productivity segment, we
-got similar results as the original change in SPH by segment. The
-original results are shown in Table 2 below.
+got similar results as the original change in SPH by segment. The results are shown in the table below.
 
 <table style="width:94%;">
 <colgroup>
@@ -823,3 +822,4 @@ tidyverse*. <https://moderndive.com/index.html>
 
 Xu, Y. (2022). *fect*. \[User Manual\].GitHub. 
 <https://yiqingxu.org/packages/fect/>
+
